@@ -6,9 +6,11 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.init as init
+import matplotlib.pyplot as plt
 from sklearn import metrics
 from torch.distributions import MultivariateNormal, Normal
 from torch.distributions.distribution import Distribution
+from sklearn.metrics import roc_curve, roc_auc_score, confusion_matrix, auc
 
 
 def get_mean_and_std(dataset):
@@ -127,48 +129,76 @@ def format_time(seconds):
         f = '0ms'
     return f
 
+# Binary Classification
+def binary_roc_curve(y_true, y_pred, plot, ax, tit):
+    fpr, tpr, thresholds = roc_curve(y_true, y_pred)
+    roc_auc = auc(fpr, tpr)
+    
+    if plot:
+        ax.plot(fpr, tpr, color='darkorange', label='ROC curve (area = %0.2f)' % roc_auc)
+        ax.plot([0, 1], [0, 1], color='navy', linestyle='--')
+        ax.set_xlim([0.0, 1.0])
+        ax.set_ylim([0.0, 1.05])
+        ax.set_xlabel('False Positive Rate')
+        ax.set_ylabel('True Positive Rate')
+        ax.set_title(tit)
+        ax.legend(loc="lower right", fontsize=12)
+    return roc_auc
+
 
 def ROC_OOD(ood_Dent, ood_MI, ood_Ent, ood_MaxP, ood_precision, all_label,
-            base_Ent, base_MaxP):
+            base_Ent, base_MaxP, out_fname):
     print('OOD Detection!')
-    auroc_Dent = metrics.roc_auc_score(all_label.numpy(), ood_Dent.numpy())
+    auroc_Dent = metrics.roc_auc_score(all_label.numpy(), ood_Dent.numpy()) # Meta differential entropy
     auroc_MI = metrics.roc_auc_score(all_label.numpy(), ood_MI.numpy())
-    auroc_Ent = metrics.roc_auc_score(all_label.numpy(), ood_Ent.numpy())
-    auroc_MaxP = metrics.roc_auc_score(all_label.numpy(), 1 - ood_MaxP.numpy())
+    auroc_Ent = metrics.roc_auc_score(all_label.numpy(), ood_Ent.numpy()) # Meta entropy
+    auroc_MaxP = metrics.roc_auc_score(all_label.numpy(), 1 - ood_MaxP.numpy()) # Meta MaxP
     auroc_precision = metrics.roc_auc_score(all_label.numpy(), -ood_precision.numpy())
-    auroc_base_Ent = metrics.roc_auc_score(all_label.numpy(), base_Ent.numpy())
-    auroc_base_MaxP = metrics.roc_auc_score(all_label.numpy(), 1 - base_MaxP.numpy())
+    auroc_base_Ent = metrics.roc_auc_score(all_label.numpy(), base_Ent.numpy()) # Base entropy
+    auroc_base_MaxP = metrics.roc_auc_score(all_label.numpy(), 1 - base_MaxP.numpy()) # Base MaxP
 
-    print('AUROC score of Differential Entropy is', auroc_Dent)
-    print('AUROC score of Mutual Information is', auroc_MI)
-    print('AUROC score of Total Entropy is', auroc_Ent)
-    print('AUROC score of MaxP is', auroc_MaxP)
-    print('AUROC score of precision is', auroc_precision)
+    # ============================ # ============================ AUCROC plot
+    fig, ax = plt.subplots(2, 2, figsize=(10, 10), sharex=True, sharey=True)
+    binary_roc_curve(all_label.numpy(), 1 - ood_MaxP.numpy(), True, ax[0,0], 'Max probability - UQ model')
+    # binary_roc_curve(all_label.numpy(), ood_MaxP.numpy(), True, ax[0,0], 'Max probability - UQ model')
+    binary_roc_curve(all_label.numpy(), ood_Dent.numpy(), True, ax[0,1], 'Entropy - UQ model')
 
-    print('AUROC score of Base Model Total Entropy is', auroc_base_Ent)
-    print('AUROC score of Base Model MaxP is', auroc_base_MaxP)
+    binary_roc_curve(all_label.numpy(), 1 - base_MaxP.numpy(), True, ax[1,0], 'Max probability - Base model')
+    # binary_roc_curve(all_label.numpy(), base_MaxP.numpy(), True, ax[1,0], 'Max probability - Base model')
+    binary_roc_curve(all_label.numpy(), base_Ent.numpy(), True, ax[1,1], 'Entropy - Base model')
+    plt.savefig(out_fname, dpi=250, bbox_inches='tight')
+    # ============================ # ============================ 
 
-    aupr_Dent = metrics.average_precision_score(all_label.numpy(), ood_Dent.numpy())
-    aupr_MI = metrics.average_precision_score(all_label.numpy(), ood_MI.numpy())
-    aupr_Ent = metrics.average_precision_score(all_label.numpy(), ood_Ent.numpy())
-    aupr_MaxP = metrics.average_precision_score(all_label.numpy(), 1 - ood_MaxP.numpy())
-    aupr_precision = metrics.average_precision_score(all_label.numpy(), -ood_precision.numpy())
-    aupr_base_Ent = metrics.average_precision_score(all_label.numpy(), base_Ent.numpy())
-    aupr_base_MaxP = metrics.average_precision_score(all_label.numpy(), 1 - base_MaxP.numpy())
+    # print('AUROC score of Differential Entropy is', auroc_Dent)
+    # print('AUROC score of Total Entropy is', auroc_Ent)
+    # print('AUROC score of MaxP is', auroc_MaxP)
+    # print('AUROC score of Mutual Information is', auroc_MI)
+    # print('AUROC score of precision is', auroc_precision)
+    # print(' ')
+    # print('AUROC score of Base Model Total Entropy is', auroc_base_Ent)
+    # print('AUROC score of Base Model MaxP is', auroc_base_MaxP)
 
-    print('AUPR score of Differential Entropy is', aupr_Dent)
-    print('AUPR score of Mutual Information is', aupr_MI)
-    print('AUPR score of Total Entropy is', aupr_Ent)
-    print('AUPR score of MaxP is', aupr_MaxP)
-    print('AUPR score of Precision is', aupr_precision)
+    # aupr_Dent = metrics.average_precision_score(all_label.numpy(), ood_Dent.numpy())
+    # aupr_MI = metrics.average_precision_score(all_label.numpy(), ood_MI.numpy())
+    # aupr_Ent = metrics.average_precision_score(all_label.numpy(), ood_Ent.numpy())
+    # aupr_MaxP = metrics.average_precision_score(all_label.numpy(), 1 - ood_MaxP.numpy())
+    # aupr_precision = metrics.average_precision_score(all_label.numpy(), -ood_precision.numpy())
+    # aupr_base_Ent = metrics.average_precision_score(all_label.numpy(), base_Ent.numpy())
+    # aupr_base_MaxP = metrics.average_precision_score(all_label.numpy(), 1 - base_MaxP.numpy())
 
-    print('AUPR score of Base Model Total Entropy is', aupr_base_Ent)
-    print('AUPR score of Base Model MaxP is', aupr_base_MaxP)
+    # print('AUPR score of Differential Entropy is', aupr_Dent)
+    # print('AUPR score of Total Entropy is', aupr_Ent)
+    # print('AUPR score of MaxP is', aupr_MaxP)
+    # print('AUPR score of Mutual Information is', aupr_MI)
+    # print('AUPR score of Precision is', aupr_precision)
+    # print(' ')
+    # print('AUPR score of Base Model Total Entropy is', aupr_base_Ent)
+    # print('AUPR score of Base Model MaxP is', aupr_base_MaxP)
 
-    return [auroc_Ent * 100, auroc_MaxP * 100, auroc_MI * 100, auroc_Dent * 100, auroc_precision * 100], \
-           [aupr_Ent * 100, aupr_MaxP * 100, aupr_MI * 100, aupr_Dent * 100, aupr_precision * 100], \
-           [auroc_base_Ent * 100, auroc_base_MaxP * 100, aupr_base_Ent * 100, aupr_base_MaxP * 100]
-
+    # return [auroc_Ent * 100, auroc_MaxP * 100, auroc_MI * 100, auroc_Dent * 100, auroc_precision * 100], \
+    #        [aupr_Ent * 100, aupr_MaxP * 100, aupr_MI * 100, aupr_Dent * 100, aupr_precision * 100], \
+    #        [auroc_base_Ent * 100, auroc_base_MaxP * 100, aupr_base_Ent * 100, aupr_base_MaxP * 100]
+    return auroc_Dent * 100
 
 def ROC_Selective(ood_Dent, ood_MI, ood_Ent, ood_MaxP, ood_precision,
                   base_Ent, base_MaxP,

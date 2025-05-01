@@ -3,13 +3,20 @@ import torch
 
 # Standard entropy loss
 def compute_entropy(log_probs):
-    return torch.sum(-torch.exp(log_probs) * log_probs, dim=1)
+    return torch.sum(-torch.exp(log_probs) * log_probs, dim=1) # entropy = sum(p * log(p)) which is= SUM[(alpha/apha0) * log(alpha/apha0)]
 
 
 # Entropy for Dirichlet output
 def compute_total_entropy(log_alphas):
+    log_probs = log_alphas - torch.logsumexp(log_alphas, 1, keepdim=True) # = log alpha_c - log(alpha_0)) = log(alpha_c/alpha_0) = log(p_c)
+    return compute_entropy(log_probs) 
+
+
+# Probability for Dirichlet output
+def compute_prob(log_alphas):
     log_probs = log_alphas - torch.logsumexp(log_alphas, 1, keepdim=True)
-    return compute_entropy(log_probs)
+    probs = torch.exp(log_probs)
+    return probs[:, 1]
 
 
 # Max Probability for Dirichlet output

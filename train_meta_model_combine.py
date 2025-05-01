@@ -2,10 +2,14 @@ from __future__ import print_function
 
 import argparse
 import os
+import sys
+import csv
 import random
 import time
-
 import numpy as np
+from pytz import timezone
+from datetime import datetime
+
 import torch
 import torch.backends.cudnn as cudnn
 import torch.optim as optim
@@ -20,6 +24,13 @@ from losses import BeliefMatchingLoss
 from metrics import compute_total_entropy, compute_max_prob, compute_differential_entropy, compute_mutual_information, \
     compute_precision
 from utils import progress_bar, convert_to_rgb
+from fundusloader import fundus_loader
+from normalize_fundus import get_mean_sd_to_normalize_fundus
+
+import matplotlib.pyplot as plt
+import warnings
+warnings.filterwarnings("ignore")
+
 
 parser = argparse.ArgumentParser(description='Meta model training')
 parser.add_argument('--gpu_id', type=str, nargs='?', default='0', help="device id to run")
@@ -31,13 +42,22 @@ parser.add_argument('--meta_model', default="WideResNet_MetaModel_combine", type
                     help='model type (default: LeNet)')
 parser.add_argument('--name', default='CIFAR100_OOD', type=str, help='name of run')
 parser.add_argument('--dataset', default='CIFAR100', type=str, help='name of run')
-parser.add_argument('--seed_trail', default=1, type=int, help='random seed')
-parser.add_argument('--batch-size', default=128, type=int, help='batch size')
-parser.add_argument('--epoch', default=20, type=int, help='total epochs to run')
+parser.add_argument('--seed_trail', default=0, type=int, help='random seed')
+parser.add_argument('--batch_size', default=128, type=int, help='batch size')
+parser.add_argument('--epoch', default=1, type=int, help='total epochs to run')
+parser.add_argument('--saving_epoch', default=1000, type=int, help='total epochs to run')
 parser.add_argument('--no-augment', dest='augment', action='store_false',
                     help='use standard augmentation (default: True)')
 parser.add_argument('--decay', default=5e-4, type=float, help='weight decay')
 parser.add_argument('--lambda_KL', default=1e-3, type=float, help='lambda for KL term in ELBO loss')
+
+parser.add_argument('--permt_noise', action='store_true', help='Add permutation noise to the validation (default: FALSE)')
+parser.add_argument('--gauss_noise',  action='store_true', help='Add Gaussian noise to the validation (default: FALSE)')
+parser.add_argument('--spckl_noise',  action='store_true', help='Add Speckle noise to the validation (default: FALSE)')
+parser.add_argument('--contr_noise', action='store_true', help='Add Contrast rescaling noise to the validation (default: FALSE)')
+parser.add_argument('--SP_noise', action='store_true', help='Add salt & pepper noise to the validation (default: FALSE)')
+
+parser.add_argument('--noise_level', default='minimal', type=str, choices=['minimal', 'low', 'moderate', 'high'], help='noise level')
 
 args = parser.parse_args()
 os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_id
@@ -47,10 +67,27 @@ best_acc = 0  # best test accuracy
 start_epoch = 0  # start from epoch 0 or last checkpoint epoch
 best_auroc = 0
 
-if args.dataset == 'MNIST':
-    args.fea_dim = [6 * 14 * 14, 5 * 5 * 16]
-else:
-    args.fea_dim = [16384, 8192, 4096, 2048, 512]
+def getOutFileName():
+    now_CDT = datetime.now(timezone('America/Chicago'))
+    current_time = now_CDT.strftime("%y-%m-%d_%H-%M-%S")
+    return current_time
+
+base_exp_name = input('What is the name of your BASE model: ')
+meta_exp_name = getOutFileName()
+
+if args.dataset == 'Fundus128':
+    ratio = int(128/32)*int(128/32) #int(args.img_size/32)*int(args.img_size/32)
+    feat_128 = [16384, 8192, 4096, 2048, 512]
+    args.fea_dim = [ratio * dim for dim in feat_128]
+elif args.dataset == 'Fundus32':
+    args.fea_dim = [16384, 8192, 4096, 2048, 512]    
+elif args.dataset == 'Fundus224' and args.base_model == 'VGG16_BaseModel_fundus224_pre':
+    ratio = int(224/32)*int(224/32) #int(args.img_size/32)*int(args.img_size/32)
+    feat_224 = [16384, 8192, 4096, 2048, 512]
+    args.fea_dim = [ratio * dim for dim in feat_224]
+elif args.dataset == 'Fundus224' and args.base_model == 'ResNet50_BaseModel_fundus224_pre':    
+    args.fea_dim = [802816, 401408, 200704, 100352, 18432]   
+
 
 if use_cuda:
     torch.manual_seed(args.seed_trail)
@@ -61,8 +98,8 @@ if use_cuda:
     random.seed(args.seed_trail)
     os.environ['PYTHONHASHSEED'] = str(args.seed_trail)
 print('==> Resuming from checkpoint..')
-assert os.path.isdir('./checkpoint'), 'Error: no checkpoint directory found!'
-checkpoint = torch.load('./checkpoint/ckpt.t7' + args.dataset + '_' + str(args.seed_trail) + '_' + str(args.base_epoch),
+assert os.path.isdir('../checkpoint'), 'Error: no checkpoint directory found!'
+checkpoint = torch.load('../checkpoint/ckpt.t7' + args.dataset + '_' + base_exp_name,
                         map_location=torch.device('cpu') if not use_cuda else None)
 
 '''
@@ -70,158 +107,72 @@ Processing data
 '''
 print('==> Preparing data..')
 # Noisy validation set for OOD
-if args.dataset == 'MNIST':
-    transform_noise = transforms.Compose([
-        transforms.Resize(32),
-        transforms.Lambda(convert_to_rgb),
+if args.dataset == 'Fundus224':
+    img_size = 224
+    mean_fun, sd_fun = get_mean_sd_to_normalize_fundus('../dataset/IODA_TVST_ztrain_val_test_annotations.csv', img_size) 
+    
+    transform_train = transforms.Compose([
+        transforms.RandomHorizontalFlip(),
+        # transforms.RandomAffine(degrees=(20, 20), translate=(0.0, 0.0)),
+        # transforms.ColorJitter(brightness=0.1, contrast=0.1, saturation=0, hue=0),
         transforms.ToTensor(),
-        pre.GaussianFilter(),
-    ])
-else:
-    transform_noise = transforms.Compose([
-        transforms.Resize(32),
-        transforms.ToTensor(),
-        pre.PermutationNoise(),
-        pre.GaussianFilter(),
-        pre.ContrastRescaling(),
-    ])
-
-if args.dataset == 'CIFAR10':
-    print('CIFAR10')
-    if args.augment:
-        transform_train = transforms.Compose([
-            transforms.RandomCrop(32, padding=4),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
-        ])
-    else:
-        transform_train = transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+        # transforms.Normalize(mean_fun, sd_fun)
         ])
 
     transform_test = transforms.Compose([
         transforms.ToTensor(),
-        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
-    ])
-    dataset = datasets.CIFAR10(root='~/data/CIFAR10', train=True, download=True, transform=transform_train)
-    dataset_val = datasets.CIFAR10(root='~/data/CIFAR10', train=True, download=False, transform=transform_test)
-    dataset_noise = datasets.CIFAR10(root='~/data/CIFAR10', train=True, download=False, transform=transform_noise)
-    num_total_data = int(len(dataset))
-    random.seed(args.seed_trail)
-    data_list = list(range(num_total_data))
-    random.shuffle(data_list)
-    train_list = data_list[:40000]
-    val_list = data_list[40000:]
-    trainset = data.Subset(dataset, train_list)
-    valset = data.Subset(dataset_val, val_list)
-    valset_noise = data.Subset(dataset_noise, val_list)
-
-    trainloader = torch.utils.data.DataLoader(trainset, batch_size=args.batch_size, shuffle=True, num_workers=8)
-    valloader = torch.utils.data.DataLoader(valset, batch_size=args.batch_size, shuffle=False, num_workers=8)
-    valloader_noise = torch.utils.data.DataLoader(valset_noise, batch_size=args.batch_size, shuffle=False,
-                                                  num_workers=8)
-
-    testset = datasets.CIFAR10(root='~/data/CIFAR10', train=False, download=False, transform=transform_test)
-    testloader = torch.utils.data.DataLoader(testset, batch_size=100, shuffle=False, num_workers=8)
-
-elif args.dataset == 'CIFAR100':
-    print('CIFAR100')
-    if args.augment:
-        transform_train = transforms.Compose([
-            transforms.RandomCrop(32, padding=4),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+        # transforms.Normalize(mean_fun, sd_fun)
         ])
-    else:
-        transform_train = transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
-        ])
+    
+    # transform_noise = transforms.Compose([
+    #                         transforms.ToTensor(),
+    #                         transforms.Normalize(mean_fun, sd_fun),
+    #                         # pre.AddSpeckleNoise(mean=0, std=0.05),
+    #                         pre.Fundus_PermutationNoise(),
+    #                         pre.Fundus_GaussianFilter(), # sigma = 0.3 + 0.5 * torch.rand(1).item()
+    #                         pre.Fundus_ContrastRescaling(), # gamma = 5 + 15 * torch.rand(1).item()
+    #                   ])
 
-    transform_test = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
-    ])
-    dataset = datasets.CIFAR100(root='~/data/CIFAR100', train=True, download=True, transform=transform_train)
-    dataset_val = datasets.CIFAR100(root='~/data/CIFAR100', train=True, download=False, transform=transform_test)
-    dataset_noise = datasets.CIFAR100(root='~/data/CIFAR100', train=True, download=False, transform=transform_noise)
-    num_total_data = int(len(dataset))
-    random.seed(args.seed_trail)
-    data_list = list(range(num_total_data))
-    random.shuffle(data_list)
-    train_list = data_list[:40000]
-    val_list = data_list[40000:]
-    trainset = data.Subset(dataset, train_list)
-    valset = data.Subset(dataset_val, val_list)
-    valset_noise = data.Subset(dataset_noise, val_list)
 
-    trainloader = torch.utils.data.DataLoader(trainset, batch_size=args.batch_size, shuffle=True, num_workers=8)
-    valloader = torch.utils.data.DataLoader(valset, batch_size=args.batch_size, shuffle=False, num_workers=8)
-    valloader_noise = torch.utils.data.DataLoader(valset_noise, batch_size=args.batch_size, shuffle=False,
-                                                  num_workers=8)
-    testset = datasets.CIFAR100(root='~/data/CIFAR100', train=False, download=False, transform=transform_test)
-    testloader = torch.utils.data.DataLoader(testset, batch_size=100, shuffle=False, num_workers=8)
+    meta_net = models.__dict__[args.meta_model](fea_dim1=args.fea_dim[0], fea_dim2=args.fea_dim[1],
+                                                fea_dim3=args.fea_dim[2], fea_dim4=args.fea_dim[3],
+                                                fea_dim5=args.fea_dim[4])
+    
 
-elif args.dataset == 'MNIST':
-    if args.augment:
-        transform_train = transforms.Compose([
-            transforms.Resize(32),
-            transforms.Lambda(convert_to_rgb),
-            transforms.ToTensor(),
-            transforms.Normalize((1 / 2, 1 / 2, 1 / 2), (1 / 2, 1 / 2, 1 / 2))
-        ])
-    else:
-        transform_train = transforms.Compose([
-            transforms.Resize(32),
-            transforms.Lambda(convert_to_rgb),
-            transforms.ToTensor(),
-            transforms.Normalize((1 / 2, 1 / 2, 1 / 2), (1 / 2, 1 / 2, 1 / 2))
-        ])
+    
+    transform_noise = transforms.Compose([transforms.ToTensor()])
+    if args.permt_noise:
+        transform_noise = transforms.Compose([*transform_noise.transforms, pre.Fundus_PermutationNoise(args.noise_level)])
+    if args.gauss_noise:
+        transform_noise= transforms.Compose([*transform_noise.transforms, pre.Fundus_GaussianFilter(args.noise_level)])
+    if args.spckl_noise:
+        transform_noise= transforms.Compose([*transform_noise.transforms, pre.Fundus_AddSpeckleNoise(args.noise_level)])
+    if args.contr_noise:
+        transform_noise= transforms.Compose([*transform_noise.transforms, pre.Fundus_ContrastRescaling(args.noise_level)])
+    if args.SP_noise:
+        transform_noise= transforms.Compose([*transform_noise.transforms, pre.Fundus_impulse_noise(args.noise_level)])
+    
+    
+    # transform_noise= transforms.Compose([*transform_noise.transforms, transforms.Normalize(mean_fun, sd_fun),])
+    print(transform_noise)
 
-    transform_test = transforms.Compose([
-        transforms.Resize(32),
-        transforms.Lambda(convert_to_rgb),
-        transforms.ToTensor(),
-        transforms.Normalize((1 / 2, 1 / 2, 1 / 2), (1 / 2, 1 / 2, 1 / 2))
-    ])
-    dataset = datasets.MNIST(root='~/data/MNIST', train=True, download=True, transform=transform_train)
-    dataset_val = datasets.MNIST(root='~/data/MNIST', train=True, download=True, transform=transform_test)
-    dataset_noise = datasets.MNIST(root='~/data/MNIST', train=True, download=False, transform=transform_noise)
-    num_total_data = int(len(dataset))
-    random.seed(args.seed_trail)
-    data_list = list(range(num_total_data))
-    random.shuffle(data_list)
-    train_list = data_list[:50000]
-    val_list = data_list[50000:]
-    trainset = data.Subset(dataset, train_list)
-    valset = data.Subset(dataset, val_list)
-    valset_noise = data.Subset(dataset_noise, val_list)
-
-    trainloader = torch.utils.data.DataLoader(trainset, batch_size=args.batch_size, shuffle=True, num_workers=8)
-    valloader = torch.utils.data.DataLoader(valset, batch_size=args.batch_size, shuffle=False, num_workers=8)
-    valloader_noise = torch.utils.data.DataLoader(valset_noise, batch_size=args.batch_size, shuffle=False,
-                                                  num_workers=8)
-    testset = datasets.MNIST(root='~/data/MNIST', train=False, download=False, transform=transform_test)
-    testloader = torch.utils.data.DataLoader(testset, batch_size=100, shuffle=False, num_workers=8)
+    trainloader = fundus_loader(224, '../dataset/IODA_TVST_train_annotations.csv', transform_train, args.batch_size, True, True, 0)
+    valloader = fundus_loader(224, '../dataset/IODA_TVST_val_annotations.csv', transform_test, 140, False, False, 0)
+    valloader_noise = fundus_loader(224, '../dataset/IODA_TVST_val_annotations.csv', transform_noise, 140, False, False, 0)
+    testloader = fundus_loader(224, '../dataset/IODA_TVST_test_annotations.csv', transform_test, 140, False, False, 0)   
 
 
 '''
 Preparing model
 '''
-if args.dataset == 'CIFAR100':
-    base_net = models.__dict__[args.base_model](16, 4, 100, 3)
-else:
+if args.dataset in ['Fundus128', 'Fundus224']:
     base_net = models.__dict__[args.base_model]()
 
-if args.dataset in ['CIFAR10', 'CIFAR100']:
-    meta_net = models.__dict__[args.meta_model](fea_dim1=args.fea_dim[0], fea_dim2=args.fea_dim[1],
-                                                fea_dim3=args.fea_dim[2], fea_dim4=args.fea_dim[3],
-                                                fea_dim5=args.fea_dim[4])
-else:
-    meta_net = models.__dict__[args.meta_model](fea_dim1=args.fea_dim[0], fea_dim2=args.fea_dim[1])
+# if args.dataset in ['Fundus128', 'Fundus224']:
+#     meta_net = models.__dict__[args.meta_model](fea_dim1=args.fea_dim[0], fea_dim2=args.fea_dim[1],
+#                                                 fea_dim3=args.fea_dim[2], fea_dim4=args.fea_dim[3],
+#                                                 fea_dim5=args.fea_dim[4])
+    
 if use_cuda:
     print('Using CUDA..')
     print(torch.cuda.device_count())
@@ -239,9 +190,9 @@ meta_net.eval()
 
 optimizer = optim.SGD(meta_net.parameters(), momentum=0.9, weight_decay=args.decay, lr=args.lr)
 
-if not os.path.isdir('results'):
-    os.mkdir('results')
-logname = ('results/log_' + meta_net.__class__.__name__ + '_' + args.name + '_' + str(args.seed_trail) + '.csv')
+if not os.path.isdir('../results/'):
+    os.mkdir('../results/')
+logname = ('../results/Meta_' + base_exp_name + '__'+ meta_exp_name + '.csv')
 
 '''
 Training Meta-model
@@ -267,7 +218,12 @@ def train(epoch):
     train_loss = 0
     correct = 0
     total = 0
-    for batch_idx, (xs, ys) in enumerate(trainloader):
+    for batch_idx, vals in enumerate(trainloader):
+        if len(vals) > 2:
+            xs, ys, _, _ = vals
+        elif len(vals) == 2:
+            xs, ys = vals    
+        
         total += ys.size(0)
         if use_cuda:
             xs, ys = xs.cuda(), ys.cuda()
@@ -314,7 +270,12 @@ def test(epoch):
 
     total = 0
     with torch.no_grad():
-        for batch_idx, (xs, ys) in enumerate(testloader):
+        for batch_idx, vals in enumerate(testloader):
+            if len(vals) > 2:
+                xs, ys, _, _ = vals
+            elif len(vals) == 2:
+                xs, ys = vals
+            
             total += ys.size(0)
             if use_cuda:
                 xs, ys = xs.cuda(), ys.cuda()
@@ -353,13 +314,24 @@ def UQ_validation():
     meta_net.eval()
     flag = True
     total = 0
+    val_loss=0
     with torch.no_grad():
         # In distribution data
-        for batch_idx, (xs, ys) in enumerate(valloader):
+        for batch_idx, vals in enumerate(valloader):
+            if len(vals) > 2:
+                xs, ys, _, _ = vals
+            elif len(vals) == 2:
+                xs, ys = vals
+            
             if use_cuda:
                 xs, ys = xs.cuda(), ys.cuda()
+            
+            total += ys.size(0)
+            if epoch == 0 and batch_idx == 0:
+                plt.close(); plt.imshow(xs[20].cpu().permute(1, 2, 0)); plt.tight_layout(); plt.savefig(f'../results/meta_val_clean.png') #  plt.imshow(xs[0,0,...]);    
 
-            logits, _ = compute_logits_and_loss(xs, ys, compute_loss=False)
+            logits, los = compute_logits_and_loss(xs, ys, compute_loss=True)
+            val_loss += los.item()
 
             # Uncertainty Criterion
             mutual_info = compute_mutual_information(logits)
@@ -376,7 +348,16 @@ def UQ_validation():
                 all_meta_predicted = torch.cat((all_meta_predicted, meta_correct.data.cpu()), 0)
 
         # Out of distribution data
-        for batch_idx, (xs, ys) in enumerate(valloader_noise):
+        for batch_idx, vals in enumerate(valloader_noise):
+            if len(vals) > 2:
+                xs, ys, _, _ = vals
+            elif len(vals) == 2:
+                xs, ys = vals
+                
+            if batch_idx == 0:
+                plt.close(); plt.imshow(xs[20].cpu().permute(1, 2, 0)); plt.tight_layout(); plt.savefig(f'../results/meta_val_noisy_{args.noise_level}.png') #  plt.imshow(xs[0,0,...]);
+                
+            
             if use_cuda:
                 xs, ys = xs.cuda(), ys.cuda()
             logits, _ = compute_logits_and_loss(xs, ys, compute_loss=False)
@@ -388,11 +369,14 @@ def UQ_validation():
 
     # ood Auroc score evaluated using mutual information
     auroc_MI = metrics.roc_auc_score(all_label.numpy(), all_mutual_info.numpy())
-    if auroc_MI > best_auroc:
-        checkpoint(auroc_MI, epoch)
-        best_auroc = auroc_MI
+    # if auroc_MI > best_auroc and epoch > 5: # and epoch == (args.epoch - 1):
+    # if epoch == 69:
+    #     print(f'auroc_MI= {auroc_MI} > best_auroc= {best_auroc}')
+    #     checkpoint(auroc_MI, epoch)
+    #     best_auroc = auroc_MI
 
-    return
+    val_loss_final = val_loss / total
+    return auroc_MI, val_loss_final
 
 
 '''
@@ -412,7 +396,12 @@ def OOD(epoch):
 
     total = 0
     with torch.no_grad():
-        for batch_idx, (xs, ys) in enumerate(valloader_noise):
+        for batch_idx, vals in enumerate(valloader_noise):
+            if len(vals) > 2:
+                xs, ys, _, _ = vals
+            elif len(vals) == 2:
+                xs, ys = vals
+            
             total += ys.size(0)
             if use_cuda:
                 xs, ys = xs.cuda(), ys.cuda()
@@ -442,19 +431,29 @@ def checkpoint(auroc, epoch):
         'epoch': epoch,
         'rng_state': torch.get_rng_state()
     }
-    if not os.path.isdir('checkpoint'):
-        os.mkdir('checkpoint')
-    torch.save(state, './checkpoint/ckpt.t7' + args.name + '_' + args.meta_model + '_' + str(args.seed_trail))
+    if not os.path.isdir('../checkpoint'):
+        os.mkdir('../checkpoint')
+    torch.save(state, '../checkpoint/ckpt.t7' + args.name + '_Meta_' + base_exp_name + '_' + meta_exp_name)
 
 
 def adjust_learning_rate(optimizer, epoch):
     """decrease the learning rate at 100 and 150 epoch"""
-    lr = args.lr
-    lr /= 10
-    if epoch >= 20:
-        lr /= 100
+    lr = args.lr/ 10#np.sqrt(epoch)
+    print(f' =========>>>>>>>>>>>>>>> Decreased lr to = {lr}')
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
+    return lr
+
+
+def adjust_lambda_KL(epoch):
+    """increase the KL lambda"""
+    # denom = (args.lambda_KL)** (-1) + (epoch - 1) * 5
+    # lamda = epoch / denom
+    lamda = args.lambda_KL / 10
+
+    v_i_loss = BeliefMatchingLoss(lamda, 1)
+    return lamda, v_i_loss
+
 
 
 '''
@@ -462,19 +461,36 @@ Main training process
 '''
 if __name__ == '__main__':
     time_start = time.perf_counter()
+    
+    if not os.path.exists(logname):
+        with open(logname, 'w') as logfile:
+            logwriter = csv.writer(logfile, delimiter=',')
+            logwriter.writerow(['epoch', 'train_loss', 'test_loss', 'val_loss', 'train_acc', 'test_acc', 'AUC_MI_vals', 'lr', 'wd', 'lambda', 'batch_size', 'dataset', 'train_transform', 'val_noise_transform'])
+
+    
+    lambda_KL = args.lambda_KL
+    lr        = args.lr
     for epoch in range(start_epoch, args.epoch + 1):
         train_loss, train_acc = train(epoch)
         test_loss, test_acc = test(epoch)
-        if args.name in ['CIFAR10_OOD', 'CIFAR100_OOD', 'MNIST_OOD']:
+        if args.name in ['Fundus128_OOD', 'Fundus224_OOD']:
             OOD(epoch)
-            UQ_validation()
-            adjust_learning_rate(optimizer, epoch)
+            auc_MI_vals, val_loss = UQ_validation()
+        
+        # if epoch == 10:
+        #     lambda_KL, vi_loss = adjust_lambda_KL(epoch)
+            # lr = adjust_learning_rate(optimizer, epoch)
+
+        with open(logname, 'a') as logfile:
+            logwriter = csv.writer(logfile, delimiter=',')
+            logwriter.writerow([epoch, train_loss, test_loss, val_loss, train_acc.item(), test_acc.item(), auc_MI_vals, lr, args.decay, lambda_KL, args.batch_size, args.dataset, transform_train, transform_noise])
+    
 
     print('Finished')
     training_time = time.perf_counter() - time_start
     print('Total training time', training_time)
 
-    if not args.early_stop:
-        checkpoint(0, args.epoch)
-    if args.name in ['CIFAR10_miss', 'CIFAR100_miss', 'MNIST_miss']:
-        checkpoint(0, args.epoch)
+
+        
+        
+        

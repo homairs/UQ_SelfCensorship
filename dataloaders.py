@@ -100,11 +100,11 @@ def TinyImageNet(transform, batch_size, shuffle, num_workers):
 
 def Corrupted(data_name, transform, batch_size, shuffle, num_workers):
     if data_name == 'MNIST':
-        oodset = datasets.MNIST(root='~/data/MNIST', train=False, download=False, transform=transform)
+        oodset = datasets.MNIST(root='~/data/MNIST', train=False, download=True, transform=transform)
     elif data_name == 'CIFAR10':
-        oodset = datasets.CIFAR10(root='~/data/CIFAR10', train=False, download=False, transform=transform)
+        oodset = datasets.CIFAR10(root='~/data/CIFAR10', train=False, download=True, transform=transform)
     elif data_name == 'CIFAR100':
-        oodset = datasets.CIFAR100(root='~/data/CIFAR100', train=False, download=False, transform=transform)
+        oodset = datasets.CIFAR100(root='~/data/CIFAR100', train=False, download=True, transform=transform)
     else:
         raise RuntimeError
 

@@ -1,3 +1,11 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Thu Nov 14 18:38:38 2024
+
+@author: homai
+"""
+
 from __future__ import print_function
 
 import argparse
@@ -22,8 +30,6 @@ import preproc as pre
 from metrics import compute_total_entropy, compute_max_prob, compute_differential_entropy, compute_mutual_information, \
     compute_precision, compute_prob
 from utils import ROC_OOD, ROC_Selective, convert_to_rgb
-
-import preproc as pre
 
 parser = argparse.ArgumentParser(description='Meta model Evaluation')
 parser.add_argument('--gpu_id', type=str, nargs='?', default='0', help="device id to run")
@@ -89,80 +95,168 @@ def get_fundus_transform(path_to_normalize_imgs):
 
 print('==> Preparing data..')
 # Noisy validation set for OOD
-if args.dataset == 'MNIST':
-    transform_noise = transforms.Compose([
-        transforms.Resize(args.im_sz),
-        transforms.Lambda(convert_to_rgb),
-        transforms.ToTensor(),
-        pre.PermutationNoise(),
-        pre.GaussianFilter(),
-        pre.ContrastRescaling(),
-    ])
-else:
-    transform_noise = transforms.Compose([
-        transforms.Resize(args.im_sz),
-        transforms.ToTensor(),
-        pre.PermutationNoise(),
-        pre.GaussianFilter(),
-        pre.ContrastRescaling(),
-    ])
 
-transform_ood_color = transforms.Compose([
-    transforms.Resize(args.im_sz),
-    transforms.Lambda(convert_to_rgb),
-    transforms.ToTensor(),
-    transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
-])
+def gaussian_nois(nois_level):
+    return transforms.Compose([transforms.ToTensor(), pre.Fundus_GaussianFilter_test(severity = nois_level)])
 
-transform_ood_normal = transforms.Compose([
-    transforms.Resize(args.im_sz),
-    transforms.ToTensor(),
-    transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
-])
+def permut_noise(nois_level):
+    return transforms.Compose([transforms.ToTensor(), pre.Fundus_PermutationNoise_test(max_permutation_size=nois_level, seed=42)])
 
-fundus_noise_trf = transforms.Compose([
-                          transforms.ToTensor(),
-                          # transforms.Normalize(mean_fun, sd_fun),
-                          # pre.AddSpeckleNoise(mean=0, std=0.01),
-                          pre.Fundus_PermutationNoise('moderate'),
-                          pre.Fundus_GaussianFilter('moderate'),
-                          pre.Fundus_ContrastRescaling('moderate'),
-                      ])
+def contrast_noise(nois_level):
+    return transforms.Compose([transforms.ToTensor(), pre.Fundus_ContrastRescaling_test(severity = nois_level)])
 
-# light_noise_trf = transforms.Compose([
-#                          transforms.ToTensor(),
-#                          pre.Fundus_PermutationNoise(0.25),
-#                          pre.Fundus_ContrastRescaling(),
-#                       ])
+def speckle_noise(severity):
+    return transforms.Compose([transforms.ToTensor(), pre.AddSpeckleNoise_test(mean=0, sd=severity, seed=42)])
+
+def combo_permt_gauss_contr(permt_level, guas_level, contr_level):
+    trf = transforms.Compose([
+                             transforms.ToTensor(),
+                             # pre.impulse_noise(imp_level),
+                             pre.Fundus_PermutationNoise_test(max_permutation_size=permt_level, seed=42),
+                             pre.Fundus_GaussianFilter_test(guas_level),
+                             pre.Fundus_ContrastRescaling_test(contr_level),
+                             ])
+    return trf
+
+def combo_spec_guas(spec_level, guas_level):
+    trf = transforms.Compose([
+                             transforms.ToTensor(),
+                             pre.AddSpeckleNoise_test(mean=0, sd=spec_level, seed=42),
+                             pre.Fundus_GaussianFilter_test(guas_level),
+                             ])
+    return trf
+
+def combo_permt_contr(permt_level, contr_level):
+    trf = transforms.Compose([
+                             transforms.ToTensor(),
+                             pre.Fundus_PermutationNoise_test(max_permutation_size=permt_level, seed=42),
+                             pre.Fundus_ContrastRescaling_test(contr_level),
+                             ])
+    return trf
+
+def combo_permt_gauss(permt_level, guas_level):
+    trf = transforms.Compose([
+                             transforms.ToTensor(),
+                             pre.Fundus_PermutationNoise_test(max_permutation_size=permt_level, seed=42),
+                             pre.Fundus_GaussianFilter_test(guas_level),
+                             ])
+    return trf
+
+def combo_gauss_contr(guas_level, contr_level):
+    trf = transforms.Compose([
+                             transforms.ToTensor(),
+                             pre.Fundus_GaussianFilter_test(guas_level),
+                             pre.Fundus_ContrastRescaling_test(contr_level),
+                             ])
+    return trf
 
 
-# # ==================================== Noise type: Gaussian
-# gauss_noise_s1 = transforms.Compose([
-#                          transforms.ToTensor(),
-#                          pre.Fundus_GaussianFilter(),
-#                       ])
+
+# ================================ # ================================ # ================================ 
+# ================================ # ================================ # ================================ 
+# ================================ Gaussian noise
+# guas1_trf = gaussian_nois(0.4)
+# guas2_trf = gaussian_nois(0.6)
+# guas3_trf = gaussian_nois(0.8)
+# guas4_trf = gaussian_nois(1)
+# guas5_trf = gaussian_nois(1.2)
+# guas6_trf = gaussian_nois(1.5)
+# # ================================ Permutation noise
+# permt1_trf  = permut_noise(0.03)  # [0.003, 0.005, 0.007, 0.03, 0.05, 0.7]
+# permt2_trf  = permut_noise(0.05)  # [0.01, 0.02,0.03,0.05,0.07,0.09]
+# permt3_trf  = permut_noise(0.1)
+# permt4_trf  = permut_noise(0.15)
+# permt5_trf  = permut_noise(0.3)
+# permt6_trf  = permut_noise(0.6)
+# # ================================ Contrast noise
+# contr1_trf = contrast_noise(3) # [15,10,7,5,3,1], [2,4,6,8,10,12], [8,12,14,16,18,20]
+# contr2_trf = contrast_noise(2.5) # WORKED: [3, 2.5, 2, 1, 0.5, 0.1]
+# contr3_trf = contrast_noise(2)
+# contr4_trf = contrast_noise(1)
+# contr5_trf = contrast_noise(0.5)
+# contr6_trf = contrast_noise(0.1)
+# ================================ Speckle noise
+# spec1_trf = speckle_noise(0.1) 
+# spec2_trf = speckle_noise(0.15)
+# spec3_trf = speckle_noise(0.2)
+# spec4_trf = speckle_noise(0.25)
+# spec5_trf = speckle_noise(0.3)
+# spec6_trf = speckle_noise(0.35)
+# ================================ impulse + contrast noise
+# permt_gaus_contr1_trf = combo_permt_gauss_contr(0.03,0.4,3)
+# permt_gaus_contr2_trf = combo_permt_gauss_contr(0.05,0.6,2.5)
+# permt_gaus_contr3_trf = combo_permt_gauss_contr(0.1,0.8,2)
+# permt_gaus_contr4_trf = combo_permt_gauss_contr(0.15,1,1)
+# permt_gaus_contr5_trf = combo_permt_gauss_contr(0.3,1.2,0.5)
+# permt_gaus_contr6_trf = combo_permt_gauss_contr(0.6,1.5,0.1)
+# # ================================ speckle+ impulse + guassian + contrast noise
+# spec_guas1_trf = combo_spec_guas(0.1, 0.4)
+# spec_guas2_trf = combo_spec_guas(0.15, 0.6)
+# spec_guas3_trf = combo_spec_guas(0.2, 0.8)
+# spec_guas4_trf = combo_spec_guas(0.25, 1)
+# spec_guas5_trf = combo_spec_guas(0.3, 1.2)
+# spec_guas6_trf = combo_spec_guas(0.35, 1.5)
+# # ================================ Permutation + contrast noise
+# permt_contr1_trf = combo_permt_contr(0.03, 3)
+# permt_contr2_trf = combo_permt_contr(0.05, 2.5)
+# permt_contr3_trf = combo_permt_contr(0.1, 2)
+# permt_contr4_trf = combo_permt_contr(0.15, 1)
+# permt_contr5_trf = combo_permt_contr(0.3, 0.5)
+# permt_contr6_trf = combo_permt_contr(0.6, 0.1)
+# # ================================ Permutation + Gaussian noise
+permt_gaus1_trf = combo_permt_gauss(0.03,0.4)
+permt_gaus2_trf = combo_permt_gauss(0.05,0.6)
+permt_gaus3_trf = combo_permt_gauss(0.1,0.8)
+permt_gaus4_trf = combo_permt_gauss(0.15,1)
+permt_gaus5_trf = combo_permt_gauss(0.3,1.2)
+permt_gaus6_trf = combo_permt_gauss(0.6,1.5)
+# # ================================ Gaussian + contrast noise
+gaus_contr1_trf = combo_gauss_contr(0.4,3)
+gaus_contr2_trf = combo_gauss_contr(0.6,2.5)
+gaus_contr3_trf = combo_gauss_contr(0.8,2)
+gaus_contr4_trf = combo_gauss_contr(1,1)
+gaus_contr5_trf = combo_gauss_contr(1.2,0.5)
+gaus_contr6_trf = combo_gauss_contr(1.5,0.1)
+
+
+
+funuds_trans_names = [
+                        # 'guas1', 'guas2', 'guas3', 'guas4', 'guas5', 'guas6',
+                        # 'permt1', 'permt2', 'permt3', 'permt4', 'permt5', 'permt6',
+                        # 'contr1', 'contr2', 'contr3', 'contr4', 'contr5', 'contr6', 
+                       # 'spec1', 'spec2','spec3', 'spec4', 'spec5', 'spec6', 
+                       # 'permt_gaus_contr1', 'permt_gaus_contr2', 'permt_gaus_contr3', 'permt_gaus_contr4', 'permt_gaus_contr5', 'permt_gaus_contr6',
+                       # 'spec_guas1', 'spec_guas2', 'spec_guas3', 'spec_guas4', 'spec_guas5', 'spec_guas6',
+                       'permt_gaus1', 'permt_gaus2', 'permt_gaus3', 'permt_gaus4', 'permt_gaus5', 'permt_gaus6',
+                       'gaus_contr1', 'gaus_contr2', 'gaus_contr3', 'gaus_contr4', 'gaus_contr5', 'gaus_contr6',
+                       # 'permt_contr1', 'permt_contr2', 'permt_contr3', 'permt_contr4', 'permt_contr5', 'permt_contr6',   
+                      ]
+
+
+fundus_transf = [
+                   # guas1_trf, guas2_trf, guas3_trf, guas4_trf, guas5_trf, guas6_trf,
+                    # permt1_trf, permt2_trf, permt3_trf, permt4_trf, permt5_trf, permt6_trf,
+                    # contr1_trf, contr2_trf, contr3_trf, contr4_trf, contr5_trf, contr6_trf,
+                  # spec1_trf, spec2_trf, spec3_trf, spec4_trf, spec5_trf, spec6_trf,
+                   # permt_gaus_contr1_trf, permt_gaus_contr2_trf, permt_gaus_contr3_trf, permt_gaus_contr4_trf, permt_gaus_contr5_trf, permt_gaus_contr6_trf,
+                  # spec_guas1_trf, spec_guas2_trf, spec_guas3_trf, spec_guas4_trf, spec_guas5_trf, spec_guas6_trf,
+                  permt_gaus1_trf, permt_gaus2_trf, permt_gaus3_trf, permt_gaus4_trf, permt_gaus5_trf, permt_gaus6_trf,
+                  gaus_contr1_trf, gaus_contr2_trf, gaus_contr3_trf, gaus_contr4_trf, gaus_contr5_trf, gaus_contr6_trf,
+                  # permt_contr1_trf, permt_contr2_trf, permt_contr3_trf, permt_contr4_trf, permt_contr5_trf, permt_contr6_trf,   
+                 ]
 # ====================================
-# mean_fun, sd_fun = get_mean_sd_to_normalize_fundus('../dataset/IODA_TVST_ztrain_val_test_annotations.csv', 224) 
-# transform_noise_min = transforms.Compose([transforms.ToTensor(), pre.Fundus_ContrastRescaling('minimal')])
-# transform_noise_low = transforms.Compose([transforms.ToTensor(), pre.Fundus_ContrastRescaling('low')])
-# transform_noise_moderate = transforms.Compose([transforms.ToTensor(), pre.Fundus_ContrastRescaling('moderate')])
-# transform_noise_high = transforms.Compose([transforms.ToTensor(), pre.Fundus_ContrastRescaling('high')])
-
 
 IODA_test_trf = get_fundus_transform('../dataset/IODA_TVST_test_annotations.csv')
-RIMeONE_trf   = get_fundus_transform('../dataset/RIMEONE-DL_annotations.csv')
-ORIGA_trf     = get_fundus_transform('../dataset/ORIGA_annotations.csv')
-REFUGE_trf    = get_fundus_transform('../dataset/REFUGE_annotations.csv')
-LAG_trf       = get_fundus_transform('../dataset/LAG_annotations.csv')
-Magrabi_trf   = get_fundus_transform('../dataset/Magrabi_annotations.csv')
-all_GLS_trf   = get_fundus_transform('../dataset/IODA_test_annotations_glSuspect.csv')
-Kaggle_trf    = get_fundus_transform('../dataset/Kaggle_annotations.csv')
-Mess2_trf     = get_fundus_transform('../dataset/Messidor2_annotations.csv')
-# IDRID_trf     = get_fundus_transform('../dataset/IDRID_annotations.csv')
 
-# Drishti_trf   = get_fundus_transform('../dataset/Drishti-GS_annotations.csv')
-# GLS_trf       = get_fundus_transform('../dataset/subset_GLS_annotations.csv')
-# OOD_trf       = get_fundus_transform('../dataset/OOD_all_annotations.csv')
+mu_ref, sd_ref= get_mean_sd_to_normalize_fundus('../dataset/REFUGE_annotations.csv', args.im_sz)
+mu_rim, sd_rim= get_mean_sd_to_normalize_fundus('../dataset/RIMEONE-DL_annotations.csv', args.im_sz)
+mu_org, sd_org= get_mean_sd_to_normalize_fundus('../dataset/ORIGA_annotations.csv', args.im_sz)
+mu_lag, sd_lag= get_mean_sd_to_normalize_fundus('../dataset/LAG_annotations.csv', args.im_sz)
+mu_mag, sd_mag= get_mean_sd_to_normalize_fundus('../dataset/Magrabi_annotations.csv', args.im_sz)
+mu_gls, sd_gls= get_mean_sd_to_normalize_fundus('../dataset/subset_GLS_annotations.csv', args.im_sz)
+mu_kgl, sd_kgl= get_mean_sd_to_normalize_fundus('../dataset/Kaggle_annotations.csv', args.im_sz)
+mu_mes, sd_mes= get_mean_sd_to_normalize_fundus('../dataset/Messidor2_annotations.csv', args.im_sz)
+mu_idr, sd_idr= get_mean_sd_to_normalize_fundus('../dataset/IDRID_annotations.csv', args.im_sz)
 
 
 testloader = None
@@ -173,55 +267,54 @@ if args.dataset in ['Fundus32', 'Fundus128', 'Fundus224']:
 Processing OOD data
 '''
 oodloaders = []
-if args.dataset in ['Fundus32', 'Fundus128', 'Fundus224']:
-    oodnames = [
-                # 'test_no_noise', 'test_noisy_min', 'test_noisy_low', 'test_noisy_moderate', 'test_noisy_high'
-                'SVHN','Omniglot', 'FashionMNIST', 'KMNIST', 'CIFAR10', 
-                'RIMEONE-DL', 'ORIGA', 'REFUGE', 'LAG','Magrabi', 'Cropped_GL-S','Kaggle', 'MESSIDOR2','IDRID_noisy'
-                ]
-                 # 'Drishti-GS', 'Blocked_ONH_IND', 'Blocked_ONH_Vess_IND', 'all_OOD_LAG_REF_DRI_RIM', 
-    # oodnames = [Drishti-GS, 'GL-S_subset', 'Blocked_ONH_IND', 'Blocked_ONH_Vess_IND', 'all_OOD_LAG_REF_DRI_RIM', 'Kaggle', 'ORIGA', 'IDRID', 'MESSIDOR2', 'GL-S_subset', 'LAG', 'Drishti-GS']
-    # oodnames = ['REFUGE_Lnoisy', 'RIMEONE-DL_Lnoisy', 'ORIGA_Lnoisy', 'LAG_Lnoisy', 'REFUGE_Hnoisy', 'RIMEONE-DL_Hnoisy', 'ORIGA_Hnoisy', 'LAG_Hnoisy']
-    # ====== Natural image datasets loaders
-    oodloaders.append(loaders.SVHN(transform_ood_normal, batch_size=100, shuffle=False, num_workers=0))
-    oodloaders.append(loaders.Omniglot(transform_ood_color, batch_size=100, shuffle=False, num_workers=0))
-    oodloaders.append(loaders.FashionMNIST(transform_ood_color, batch_size=100, shuffle=False, num_workers=0))
-    oodloaders.append(loaders.KMNIST(transform_ood_color, batch_size=100, shuffle=False, num_workers=0))
-    oodloaders.append(loaders.CIFAR10(transform_ood_normal, batch_size=100, shuffle=False, num_workers=0))
+oodnames   = []
+if args.dataset in ['Fundus32', 'Fundus128', 'Fundus224']:    
     # ====== Fundus image datasets loaders
-    # oodloaders.append(testloader)
-    # oodloaders.append(fundus_loader(args.im_sz, '../dataset/IODA_TVST_test_annotations.csv', transform_noise_min, 32, False, False, 0))
-    # oodloaders.append(fundus_loader(args.im_sz, '../dataset/IODA_TVST_test_annotations.csv', transform_noise_low, 32, False, False, 0))
-    # oodloaders.append(fundus_loader(args.im_sz, '../dataset/IODA_TVST_test_annotations.csv', transform_noise_moderate, 32, False, False, 0))
-    # oodloaders.append(fundus_loader(args.im_sz, '../dataset/IODA_TVST_test_annotations.csv', transform_noise_high, 32, False, False, 0))
+    for i, trf in enumerate(fundus_transf):
+        oodnames.append(f'REFUGE_{funuds_trans_names[i]}')
+        trf = transforms.Compose([*trf.transforms, transforms.Normalize(mu_ref, sd_ref)])
+        oodloaders.append(fundus_loader(args.im_sz, '../dataset/REFUGE_annotations.csv', trf, 32, False, False, 0))
     
-    oodloaders.append(fundus_loader(args.im_sz, '../dataset/RIMEONE-DL_annotations.csv', RIMeONE_trf, 32, False, False, 0))
-    oodloaders.append(fundus_loader(args.im_sz, '../dataset/ORIGA_annotations.csv', ORIGA_trf, 32, False, False, 0))
-    oodloaders.append(fundus_loader(args.im_sz, '../dataset/REFUGE_annotations.csv', REFUGE_trf, 32, False, False, 0))
-    oodloaders.append(fundus_loader(args.im_sz, '../dataset/LAG_annotations.csv', LAG_trf, 32, False, False, 0))
-    oodloaders.append(fundus_loader(args.im_sz, '../dataset/Magrabi_annotations.csv', Magrabi_trf, 32, False, False, 0))
-    oodloaders.append(fundus_loader(args.im_sz, '../dataset/IODA_test_annotations_glSuspect.csv', all_GLS_trf, 32, False, False, 0))
-    oodloaders.append(fundus_loader(args.im_sz, '../dataset/Kaggle_annotations.csv', Kaggle_trf, 32, False, False, 0))
-    oodloaders.append(fundus_loader(args.im_sz, '../dataset/Messidor2_annotations.csv', Mess2_trf, 32, False, False, 0))
-    oodloaders.append(fundus_loader(args.im_sz, '../dataset/IDRID_annotations.csv', fundus_noise_trf, 32, False, False, 0)) # IDRID_trf
+    for i, trf in enumerate(fundus_transf):
+        oodnames.append(f'RIMEONE-DL_{funuds_trans_names[i]}')
+        trf = transforms.Compose([*trf.transforms, transforms.Normalize(mu_rim, sd_rim)])
+        oodloaders.append(fundus_loader(args.im_sz, '../dataset/RIMEONE-DL_annotations.csv', trf, 32, False, False, 0))
     
-    # oodloaders.append(fundus_loader(args.im_sz, '../dataset/Drishti-GS_annotations.csv', Drishti_trf, 32, False, False, 0))
-    # ====== Other fundus loaders
-    # oodloaders.append(block_ONH(args.im_sz, '../dataset/IODA_TVST_test_annotations.csv', IODA_test_trf, 32, False, False, 0))
-    # oodloaders.append(block_ONH_Vess(args.im_sz, '../dataset/IODA_TVST_test_annotations.csv', IODA_test_trf, 32, False, False, 0))
-    # oodloaders.append(fundus_loader(args.im_sz, '../dataset/OOD_all_annotations.csv', OOD_trf, 32, False, False, 0))
-    # oodloaders.append(fundus_loader(args.im_sz, '../dataset/IDRID_annotations.csv', IDRID_trf, 32, False, False, 0))
-    # oodloaders.append(fundus_loader(args.im_sz, '../dataset/subset_GLS_annotations.csv', GLS_trf, 32, False, False, 0))
-    # ====== light noise
-    # oodloaders.append(fundus_loader(args.im_sz, '../dataset/REFUGE_annotations.csv', light_noise_trf, 32, False, False, 0))
-    # oodloaders.append(fundus_loader(args.im_sz, '../dataset/RIMEONE-DL_annotations.csv', light_noise_trf, 32, False, False, 0))
-    # oodloaders.append(fundus_loader(args.im_sz, '../dataset/ORIGA_annotations.csv', light_noise_trf, 32, False, False, 0))
-    # oodloaders.append(fundus_loader(args.im_sz, '../dataset/LAG_annotations.csv', light_noise_trf, 32, False, False, 0))
-    # # # ====== high noise
-    # oodloaders.append(fundus_loader(args.im_sz, '../dataset/REFUGE_annotations.csv', fundus_noise_trf, 32, False, False, 0))
-    # oodloaders.append(fundus_loader(args.im_sz, '../dataset/RIMEONE-DL_annotations.csv', fundus_noise_trf, 32, False, False, 0))
-    # oodloaders.append(fundus_loader(args.im_sz, '../dataset/ORIGA_annotations.csv', fundus_noise_trf, 32, False, False, 0))
-    # oodloaders.append(fundus_loader(args.im_sz, '../dataset/LAG_annotations.csv', fundus_noise_trf, 32, False, False, 0))
+    for i, trf in enumerate(fundus_transf):
+        oodnames.append(f'ORIGA_{funuds_trans_names[i]}')
+        trf = transforms.Compose([*trf.transforms, transforms.Normalize(mu_org, sd_org)])
+        oodloaders.append(fundus_loader(args.im_sz, '../dataset/ORIGA_annotations.csv', trf, 32, False, False, 0))
+
+    for i, trf in enumerate(fundus_transf):
+        oodnames.append(f'LAG_{funuds_trans_names[i]}')
+        trf = transforms.Compose([*trf.transforms, transforms.Normalize(mu_lag, sd_lag)])
+        oodloaders.append(fundus_loader(args.im_sz, '../dataset/LAG_annotations.csv', trf, 32, False, False, 0))
+    
+    for i, trf in enumerate(fundus_transf):
+        oodnames.append(f'Magrabi_{funuds_trans_names[i]}')
+        trf = transforms.Compose([*trf.transforms, transforms.Normalize(mu_mag, sd_mag)])
+        oodloaders.append(fundus_loader(args.im_sz, '../dataset/Magrabi_annotations.csv', trf, 32, False, False, 0))
+    
+    for i, trf in enumerate(fundus_transf):
+        oodnames.append(f'Cropped_GL-S_{funuds_trans_names[i]}')   
+        trf = transforms.Compose([*trf.transforms, transforms.Normalize(mu_gls, sd_gls)])
+        oodloaders.append(fundus_loader(args.im_sz, '../dataset/IODA_test_annotations_glSuspect.csv', trf, 32, False, False, 0))
+        
+    for i, trf in enumerate(fundus_transf):
+        oodnames.append(f'Kaggle_{funuds_trans_names[i]}')
+        trf = transforms.Compose([*trf.transforms, transforms.Normalize(mu_kgl, sd_kgl)])
+        oodloaders.append(fundus_loader(args.im_sz, '../dataset/Kaggle_annotations.csv', trf, 32, False, False, 0))
+        
+    for i, trf in enumerate(fundus_transf):
+        oodnames.append(f'MESSIDOR2_{funuds_trans_names[i]}')
+        trf = transforms.Compose([*trf.transforms, transforms.Normalize(mu_mes, sd_mes)])
+        oodloaders.append(fundus_loader(args.im_sz, '../dataset/Messidor2_annotations.csv', trf, 32, False, False, 0))
+    
+    for i, trf in enumerate(fundus_transf):
+        oodnames.append(f'IDRiD_{funuds_trans_names[i]}')
+        trf = transforms.Compose([*trf.transforms, transforms.Normalize(mu_idr, sd_idr)])
+        oodloaders.append(fundus_loader(args.im_sz, '../dataset/IDRID_annotations.csv', trf, 32, False, False, 0))
+
 
 
 print('current seeds', args.seed_trail)
@@ -386,8 +479,6 @@ if args.name in ['Fundus32_miss', 'Fundus128_miss', 'Fundus224_miss']:
                   base_preds, meta_preds)
 
 elif args.name in ['Fundus32_OOD', 'Fundus128_OOD', 'Fundus224_OOD']:
-    results = pd.DataFrame(columns=["Value"])
-    auc_ent_diff = 0
     for i in range(len(oodloaders)):
         df = pd.DataFrame()
         print(oodnames[i])
@@ -406,12 +497,10 @@ elif args.name in ['Fundus32_OOD', 'Fundus128_OOD', 'Fundus224_OOD']:
         all_base_maxps = torch.cat([base_maxps, ood_base_maxps])
 
         # Evaluate OOD detection performance
-        auc_ent_diff = ROC_OOD(all_diff_ents, all_mis, all_ents, all_maxps, all_precs,
+        ROC_OOD(all_diff_ents, all_mis, all_ents, all_maxps, all_precs,
                 all_labels, all_base_ents, all_base_maxps, '../results/'+oodnames[i]+f'_AUC__{base_exp_name}__{meta_exp_name}.png')
-        
-        
-        results.loc[f'{oodnames[i]}_meta_diffent'] = auc_ent_diff 
-        ## =====> saving results in file
+
+        # =====> saving results in file
         max_len = max(len(maxps), len(ood_maxps))
         print(f'Base len= {len(maxps)}, Dir len= {len(ood_maxps)} ===>>> max len = {max_len}')
         # ================ meta and base stats for IND data
@@ -421,7 +510,7 @@ elif args.name in ['Fundus32_OOD', 'Fundus128_OOD', 'Fundus224_OOD']:
         base_prob1    = prep_data(base_pb1, max_len);    meta_prob1    = prep_data(meta_pb1, max_len);
         ind_dir_alfa0 = prep_data(meta_alfa0, max_len);  ind_dir_alfa1 = prep_data(meta_alfa1, max_len);
         ind_dir_difent= prep_data(diff_ents, max_len);   ind_dir_mis   = prep_data(mis, max_len);  
-        ## ================ meta and base stats for OOd data
+        # ================ meta and base stats for OOd data
         ood_maxprob    = prep_data(ood_maxps, max_len);      ood_base_maxprob = prep_data(ood_base_maxps, max_len)
         ood_entropy    = prep_data(ood_ents, max_len);       ood_base_entropy = prep_data(ood_base_ents, max_len)
         ood_metapreds  = prep_data(ood_meta_preds, max_len); ood_basepreds    = prep_data(ood_base_preds, max_len)
@@ -429,16 +518,16 @@ elif args.name in ['Fundus32_OOD', 'Fundus128_OOD', 'Fundus224_OOD']:
         ood_dir_alfa0  = prep_data(ood_meta_alfa0, max_len); ood_dir_alfa1    = prep_data(ood_meta_alfa1, max_len);
         ood_dir_difent = prep_data(ood_diff_ents, max_len);  ood_dir_mis      = prep_data(ood_mis, max_len);       
         
-        ## ================
+        # ================
         df = pd.DataFrame({
-                            'ind_meta_mi':ind_dir_mis, 'ood_meta_mi':ood_dir_mis, 
-                            'ind_meta_diffent':ind_dir_difent, 
-                            'ood_meta_diffent':ood_dir_difent, 'ind_meta_entropy':entropy, 'ood_meta_entropy':ood_entropy, 
-                            'ind_base_entropy':baseentropy, 'ood_base_entropy':ood_base_entropy, 'ind_meta_preds':metapreds, 
-                            'ind_base_preds':basepreds, 'ind_meta_maxp':maxprob, 'ind_base_maxp':base_maxprob, 'ind_meta_prob1':meta_prob1, 
-                            'ind_base_prob1':base_prob1, 'ood_meta_preds':ood_metapreds, 'ood_meta_maxp':ood_maxprob, 'ood_meta_prob1':ood_meta_prob1, 
-                            'ood_base_preds':ood_basepreds, 'ood_base_maxp':ood_base_maxprob, 'ood_base_prob1': ood_base_prob1, 'ind_alfa0': ind_dir_alfa0, 
-                            'ind_alfa1': ind_dir_alfa1, 'ood_alfa0': ood_dir_alfa0, 'ood_alfa1': ood_dir_alfa1})
+                           'ind_meta_mi':ind_dir_mis, 'ood_meta_mi':ood_dir_mis, 
+                           'ind_meta_diffent':ind_dir_difent, 
+                           'ood_meta_diffent':ood_dir_difent, 'ind_meta_entropy':entropy, 'ood_meta_entropy':ood_entropy, 
+                           'ind_base_entropy':baseentropy, 'ood_base_entropy':ood_base_entropy, 'ind_meta_preds':metapreds, 
+                           'ind_base_preds':basepreds, 'ind_meta_maxp':maxprob, 'ind_base_maxp':base_maxprob, 'ind_meta_prob1':meta_prob1, 
+                           'ind_base_prob1':base_prob1, 'ood_meta_preds':ood_metapreds, 'ood_meta_maxp':ood_maxprob, 'ood_meta_prob1':ood_meta_prob1, 
+                           'ood_base_preds':ood_basepreds, 'ood_base_maxp':ood_base_maxprob, 'ood_base_prob1': ood_base_prob1, 'ind_alfa0': ind_dir_alfa0, 
+                           'ind_alfa1': ind_dir_alfa1, 'ood_alfa0': ood_dir_alfa0, 'ood_alfa1': ood_dir_alfa1})
         
         ind_labl = [item.item() for sublist in IND_gt for item in sublist]
         ind_labl.extend([None] * (max_len - len(ind_labl)))
@@ -466,7 +555,6 @@ elif args.name in ['Fundus32_OOD', 'Fundus128_OOD', 'Fundus224_OOD']:
         
 
         df.to_csv(f'../results/{oodnames[i]}_probs.csv', index=False)
-        results.to_csv(f'../results/AUC_OOD__{base_exp_name}__{meta_exp_name}.csv')
        
 
 
