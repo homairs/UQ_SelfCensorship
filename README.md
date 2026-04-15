@@ -1,5 +1,5 @@
 # Post-hoc Uncertainty Learning using a Dirichlet Meta-Model
-This repository contains official implementation of TVST 2025 paper [Robust Uncertainty-Informed Glaucoma Classification Under Data Shift].
+This repository contains official implementation of TVST 2025 paper [Robust Uncertainty-Informed Glaucoma Classification Under Data Shift] (doi: 10.1167/tvst.14.6.3).
 
 ## Requirements
 - python == 3.8.8
